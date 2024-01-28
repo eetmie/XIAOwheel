@@ -22,7 +22,7 @@ void setup()
 
         debouncers[currentPinIndex] = Bounce();
         debouncers[currentPinIndex].attach(buttonPins[currentPinIndex]); // After setting up the button, setup the Bounce instance :
-        debouncers[currentPinIndex].interval(5);
+        debouncers[currentPinIndex].interval(3);
     }
 
     BleGamepadConfiguration bleGamepadConfig;
