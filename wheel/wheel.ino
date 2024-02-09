@@ -91,7 +91,8 @@ void setup() {
     // I am alive!
     beep(1, 100, 400);
     beep(1, 100, 800);
-    blink(1,100);
+    delay(500);
+    readBattery();
 }
 
 void loop() {
