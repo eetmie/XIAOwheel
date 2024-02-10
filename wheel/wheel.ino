@@ -1,18 +1,18 @@
 #include <bluefruit.h>
 #include <Bounce2.h>
-// #include <Adafruit_TinyUSB.h> // for Serial.print()
+//#include <Adafruit_TinyUSB.h> // for Serial.print()
 
-unsigned long ClutchDelay = 120; // clutch-kick delay in ms
+unsigned long clutchDelay = 200; // total clutch-kick delay in ms
 
 // Pins definition
+#define NUM_BUTTONS     (4)
+
 #define PIN_LBTN        (0)
 #define PIN_RPADL       (1)
 #define PIN_EXTLED      (2)
 #define PIN_RBTN        (3)
 #define PIN_LPADL       (4)
 #define PIN_BUZZ        (5)
-
-#define NUM_BUTTONS     (4)
 
 #define PIN_VBAT        (32) // D32 battery voltage
 #define PIN_VBAT_ENABLE (14) // D14 LOW:read enable
@@ -27,12 +27,14 @@ BLEDis bledis;
 BLEHidGamepad blegamepad;
 hid_gamepad_report_t gp;
 
-// Settings variables (stored in RAM because XIAO didn't have EEPROM)
-int clutch_mode = 0;
+// Settings variables (stored in RAM because XIAO didn't have EEPROM haha)
+int clutchMode = 0;
+int clutchSpeed = 0;
 bool inSettingsMenu = false;
 
 // Track the last reported button state
 uint32_t lastButtonsState = 0;
+
 
 // For holding down buttons
 unsigned long rbtnPressedTime = 0;
@@ -52,7 +54,6 @@ void setup() {
     //Serial.begin(115200);
     //while (!Serial) delay(10); // Wait for Serial to be ready.
 
-    // BLE Setup
     Bluefruit.begin();
     Bluefruit.setName("OMP Trecento"); // This name will be visible in Windows
 
@@ -61,7 +62,7 @@ void setup() {
     
     bledis.setManufacturer("Eddu");
     bledis.setModel("02");
-    bledis.setSerial("0001")
+    bledis.setSerialNum("0001");
     bledis.begin();
     blegamepad.begin();
     startAdv();
@@ -95,13 +96,8 @@ void setup() {
     readBattery();
 }
 
+
 void loop() {
-    handleConnectionStatus();
-    delay(10); // Small delay to prevent the loop from running too fast
-}
-
-
-void handleConnectionStatus() {
     // Blink if no connection
     if (!Bluefruit.connected()) {
         static unsigned long lastBlinkTime = 0;
@@ -110,14 +106,43 @@ void handleConnectionStatus() {
             blink(1, 100);
             lastBlinkTime = millis();
         }
-    } else {
+    } else {  // connected, main functionality
         handleButtonActions();
-        // go to sleep after 5min if disconnected and charging
-        checkSleepCondition();
-        // wake up via button press
-        wakeUpAndAdvertise();
     }
+
+    // Check charge status every 5 seconds
+    static unsigned long lastChargeCheckTime = 0;
+    const unsigned long chargeCheckInterval = 5000;
+    if (millis() - lastChargeCheckTime >= chargeCheckInterval) {
+        chargeStatus();
+        lastChargeCheckTime = millis();
+    }
+
+    delay(10); // Let the brother relax for a while
 }
+
+
+void executeClutchKick(int buttonNumber = -1) {
+  // Press in the clutch
+  gp.x = 127;
+  blegamepad.report(&gp);
+
+  delay(2/3 * clutchDelay + (clutchSpeed * 200)); // Wait 2/3 delay before shifting
+  
+  if (buttonNumber >= 0) {
+    // Gearswitch
+    gp.buttons |= (1 << buttonNumber); // Press the specified button
+    blegamepad.report(&gp);
+  }
+
+  delay(1/3 * clutchDelay);
+
+  // Release the clutch
+  gp.x = 0;
+  blegamepad.report(&gp);
+}
+
+
 
 void handleButtonActions() {
   // oh boy this is messy, good luck
@@ -126,7 +151,7 @@ void handleButtonActions() {
   }
 
   // Handle clutch_mode behavior when pressing paddles
-  if (clutch_mode == 1) {
+  if (clutchMode == 1) {
     // Check if either paddle button is pressed
     bool isLPaddlePressed = debouncer[1].read() == LOW; // LPADL
     bool isRPaddlePressed = debouncer[3].read() == LOW; // RPADL
@@ -149,16 +174,18 @@ void handleButtonActions() {
   }
 
   // Detect if RBTN and LBTN are pressed together for entering settings
-  if (debouncer[2].read() == LOW && debouncer[0].read() == LOW) { // Assuming RBTN is at index 2 and LBTN is at index 0
+  if (debouncer[2].read() == LOW && debouncer[0].read() == LOW) {
     if (!isEnteringSettings) {
-      lastButtonPressTime = millis();
-      isEnteringSettings = true;
+        lastButtonPressTime = millis();
+        isEnteringSettings = true;
     } else if (millis() - lastButtonPressTime >= 1000) {
-      settingsMenu();
-      isEnteringSettings = false; // Reset flag to prevent re-triggering
-      // Skip sending any report when entering the settings menu
-      lastButtonsState = 0; // Ensure the state is reset to send report next time
-      return;
+        if (!inSettingsMenu) { // Only beep when first entering the settings menu
+            beep(1, 300, 1200); // Beep once upon entering the settings
+        }
+        settingsMenu();
+        isEnteringSettings = false; // Reset flag to prevent re-triggering
+        lastButtonsState = 0; // Ensure the state is reset to send report next time
+        return;
     }
   } else {
     isEnteringSettings = false; // Reset flag if either button is released
@@ -166,25 +193,31 @@ void handleButtonActions() {
 
   // In Settings Menu Logic
   if (inSettingsMenu) {
-    if (debouncer[0].fell()) { // LBTN for enabling clutch_mode
-        clutch_mode = 1;
-        beep(1, 100, 1100);
-        // Kick the clutch so it can be assigned ingame
-        executeClutchKick();
-        beep(2, 100, 1100);
-
-    } else if (debouncer[2].fell()) { // RBTN for disabling clutch_mode
-        clutch_mode = 0;
-        beep(1, 100, 900);
+    // Toggle clutch mode
+    if (debouncer[0].fell()) {
+        bool previousClutchMode = clutchMode;
+        clutchMode = !clutchMode; // Toggle the value
+        if (clutchMode != previousClutchMode) { // Only beep if state changed
+            executeClutchKick(); // Optional based on your logic
+            beep(clutchMode ? 2 : 1, 100, clutchMode ? 1100 : 900);
+        }
     }
 
+    // Toggle clutch speed
+    if (debouncer[2].fell()) {
+        bool previousClutchSpeed = clutchSpeed;
+        clutchSpeed = !clutchSpeed;
+        if (clutchSpeed != previousClutchSpeed) { // Only beep if state changed
+            beep(clutchSpeed ? 2 : 1, 100, clutchSpeed ? 1200 : 1100);
+        }
+    }
 
     // Exiting settings menu with paddles
     if (debouncer[1].fell() || debouncer[3].fell()) {
       settingsMenu(); // Toggle settings menu state
     }
     return; // Prevent further processing when in settings menu
-  }
+    }
 
   // Prepare a variable for the current button state outside of settings menu
   uint32_t currentButtonsState = 0;
@@ -203,44 +236,13 @@ void handleButtonActions() {
     blegamepad.report(&gp); // Send the gamepad report
     lastButtonsState = currentButtonsState; // Update lastButtonsState
   }
-
-
-  // Check if the device should enter a low-power state
-  checkSleepCondition();
-      
-  // Check if the device should wake up and start advertising
-  wakeUpAndAdvertise();
-}
-  // if not connected and charging, go sleep. Wake up if some button is held
-  delay(10); // Let the brother relax for a while
 }
 
-void executeClutchKick(int buttonNumber = -1) {
-  // Press in the clutch
-  gp.x = 127;
-  blegamepad.report(&gp);
-
-  delay(2/3 * clutchDelay); // Wait 2/3 delay before shifting
-  
-  if (buttonNumber >= 0) {
-    // Gearswitch
-    gp.buttons |= (1 << buttonNumber); // Press the specified button
-    blegamepad.report(&gp);
-    delay(5);
-    gp.buttons &= ~(1 << buttonNumber); // Release the specified button
-    blegamepad.report(&gp);
-  }
-
-  delay(1/3 * clutchDelay);
-
-  // Release the clutch
-  gp.x = 0;
-  blegamepad.report(&gp);
-}
 
 void settingsMenu() {
     if (!inSettingsMenu) {
-        beep(1, 300, 1200);
+        // beep(1, 100, 900);
+        // beep(1, 100, 1200);
         readBattery();
         inSettingsMenu = true;
     } else {
@@ -250,50 +252,13 @@ void settingsMenu() {
     }
 }
 
+
 bool chargeStatus() {
     bool isCharging = digitalRead(PIN_CHG) == LOW;    
     digitalWrite(PIN_EXTLED, isCharging ? HIGH : LOW); // LED on if charging
     return isCharging;
 }
 
-
-void checkSleepCondition() {
-    static unsigned long disconnectChargeStartTime = 0; // Track when the device started being disconnected and charging
-    static bool advertisingStopped = false; // Flag to track if advertising has been stopped
-
-    if (!Bluefruit.connected() && chargeStatus()) { // Nicely hidden charge led call
-        if (disconnectChargeStartTime == 0) {
-            // Record the time when the device first becomes disconnected and starts charging
-            disconnectChargeStartTime = millis();
-        } else if (millis() - disconnectChargeStartTime >= 300000 && !advertisingStopped) {
-            // Stop advertising after 5 minutes
-            Bluefruit.Advertising.stop();
-            advertisingStopped = true; // Set the flag to indicate advertising has stopped
-        }
-    } else {
-        // Reset the timer if the device is connected or not charging
-        disconnectChargeStartTime = 0;
-    }
-}
-
-
-void wakeUpAndAdvertise() {
-    bool buttonPressed = false;
-    for (int i = 0; i < NUM_BUTTONS; ++i) {
-        debouncer[i].update();
-        if (debouncer[i].read() == LOW) {
-            buttonPressed = true;
-            break;
-        }
-    }
-
-    if (buttonPressed) {
-        // Start advertising again if any button is pressed
-        beep(1, 100, 400);
-        beep(1, 100, 800);
-        startAdv();
-    }
-}
 
 void startAdv(void) {
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
@@ -307,7 +272,15 @@ void startAdv(void) {
   Bluefruit.Advertising.start(0);
 }
 
+
+void stopAdv() {
+  // for future power-saving systems
+  return;
+}
+
+
 void readBattery() {
+
     // You could toggle VBAT pin on/off to save power, but it has risks 
     
     int vbattADC = analogRead(PIN_VBAT);
@@ -328,8 +301,8 @@ void readBattery() {
     digitalWrite(PIN_EXTLED, LOW);
     delay(200);
     blink(blinks, 200);
-    }
 }
+
 
 // beep beep
 void beep(int beeps, int beepDelay, int beepTone) {
@@ -343,6 +316,7 @@ void beep(int beeps, int beepDelay, int beepTone) {
   }
 }
 
+
 // blink blink
 void blink(int blinks, int blinkDelay) {
   for (int i = 0; i < blinks; i++) {
@@ -350,8 +324,7 @@ void blink(int blinks, int blinkDelay) {
     delay(blinkDelay);
     digitalWrite(PIN_EXTLED, LOW);
     if (i < blinks - 1) {
-      delay(blinkDelay); // Delay between blinks if not the last blink
+      delay(blinkDelay);
     }
   }
 }
-           
