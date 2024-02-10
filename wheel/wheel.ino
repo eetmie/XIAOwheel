@@ -31,6 +31,7 @@ hid_gamepad_report_t gp;
 int clutchMode = 0;
 int clutchSpeed = 0;
 bool inSettingsMenu = false;
+bool isEnteringSettings = false;
 
 // Track the last reported button state
 uint32_t lastButtonsState = 0;
@@ -45,7 +46,10 @@ bool rbtnPreviouslyPressed = false;
 bool lbtnPreviouslyPressed = false;
 // For entering the menu
 unsigned long lastButtonPressTime = 0;
-bool isEnteringSettings = false;
+
+bool isCharging = false;
+unsigned long chargeStartTime = 0;
+bool shouldAdvertise = true;
 
 // Debounce
 Bounce debouncer[NUM_BUTTONS];
@@ -98,35 +102,55 @@ void setup() {
 
 
 void loop() {
-    // Blink if no connection
-    if (!Bluefruit.connected()) {
-        static unsigned long lastBlinkTime = 0;
-        const unsigned long blinkInterval = 2000;
-        if (millis() - lastBlinkTime >= blinkInterval) {
-            blink(1, 100);
-            lastBlinkTime = millis();
-        }
-    } else {  // connected, main functionality
-        handleButtonActions();
-    }
-
-    // Check charge status every 5 seconds
+    // Update charge status at defined intervals
     static unsigned long lastChargeCheckTime = 0;
     const unsigned long chargeCheckInterval = 5000;
     if (millis() - lastChargeCheckTime >= chargeCheckInterval) {
-        chargeStatus();
+        chargeStatus(); // Check and update charging status
         lastChargeCheckTime = millis();
     }
 
-    delay(10); // Let the brother relax for a while
+    // Handle blinking for no connection status
+    // Charge light messes this up a bit but not bad
+    if (!Bluefruit.connected() && shouldAdvertise) {
+        static unsigned long lastBlinkTime = 0;
+        const unsigned long blinkInterval = 2000;
+        if (millis() - lastBlinkTime >= blinkInterval) {
+            blink(1, 100); // Perform blinking to indicate no connection
+            lastBlinkTime = millis();
+        }
+    } else if (Bluefruit.connected()) {
+        // Handle main functionality when connected
+        handleButtonActions();
+    }
+
+    // Wake up and start advertising on button press if currently not advertising
+    if (!shouldAdvertise && anyButtonPressed()) {
+        shouldAdvertise = true; // Set flag to start advertising
+        startAdv(); // Start BLE advertising
+    }
+
+    delay(10); // Let the guy chill
 }
+
+
+bool anyButtonPressed() {
+    // Check if any button is pressed with debouncing
+    for (int i = 0; i < NUM_BUTTONS; ++i) {
+        debouncer[i].update(); // Update the debouncer state
+        if (debouncer[i].read() == LOW) {
+            return true; // Button is pressed and debounced
+        }
+    }
+    return false; // No button pressed
+}
+
 
 
 void executeClutchKick(int buttonNumber = -1) {
   // Press in the clutch
   gp.x = 127;
   blegamepad.report(&gp);
-
   delay(2/3 * clutchDelay + (clutchSpeed * 200)); // Wait 2/3 delay before shifting
   
   if (buttonNumber >= 0) {
@@ -136,7 +160,6 @@ void executeClutchKick(int buttonNumber = -1) {
   }
 
   delay(1/3 * clutchDelay);
-
   // Release the clutch
   gp.x = 0;
   blegamepad.report(&gp);
@@ -254,8 +277,21 @@ void settingsMenu() {
 
 
 bool chargeStatus() {
-    bool isCharging = digitalRead(PIN_CHG) == LOW;    
+    isCharging = digitalRead(PIN_CHG) == LOW;
     digitalWrite(PIN_EXTLED, isCharging ? HIGH : LOW); // LED on if charging
+    
+    if (isCharging && !Bluefruit.connected()) {
+        if (chargeStartTime == 0) { // Start timer if not already started
+            chargeStartTime = millis();
+        } else if (millis() - chargeStartTime > 30000) {
+            shouldAdvertise = false;
+            stopAdv(); // Stop advertising
+        }
+    } else {
+        chargeStartTime = 0; // Reset timer if not charging or connected
+        shouldAdvertise = true; // Enable advertising if connected
+    }
+    
     return isCharging;
 }
 
@@ -274,8 +310,7 @@ void startAdv(void) {
 
 
 void stopAdv() {
-  // for future power-saving systems
-  return;
+  Bluefruit.Advertising.stop();
 }
 
 
