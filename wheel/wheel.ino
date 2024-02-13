@@ -203,7 +203,7 @@ void handleButtonActions() {
         isEnteringSettings = true;
     } else if (millis() - lastButtonPressTime >= 1000) {
         if (!inSettingsMenu) { // Only beep when first entering the settings menu
-            beep(1, 300, 1200); // Beep once upon entering the settings
+            beep(1, 300, 2200); // Beep once upon entering the settings
         }
         settingsMenu();
         isEnteringSettings = false; // Reset flag to prevent re-triggering
@@ -222,7 +222,7 @@ void handleButtonActions() {
         clutchMode = !clutchMode; // Toggle the value
         if (clutchMode != previousClutchMode) { // Only beep if state changed
             executeClutchKick(); // Optional based on your logic
-            beep(clutchMode ? 2 : 1, 100, clutchMode ? 1100 : 900);
+            beep(clutchMode ? 2 : 1, 100, clutchMode ? 2300 : 2200);
         }
     }
 
@@ -231,7 +231,7 @@ void handleButtonActions() {
         bool previousClutchSpeed = clutchSpeed;
         clutchSpeed = !clutchSpeed;
         if (clutchSpeed != previousClutchSpeed) { // Only beep if state changed
-            beep(clutchSpeed ? 2 : 1, 100, clutchSpeed ? 1200 : 1100);
+            beep(clutchSpeed ? 2 : 1, 100, clutchSpeed ? 2300 : 2200);
         }
     }
 
@@ -264,14 +264,13 @@ void handleButtonActions() {
 
 void settingsMenu() {
     if (!inSettingsMenu) {
-        // beep(1, 100, 900);
-        // beep(1, 100, 1200);
+
         readBattery();
         inSettingsMenu = true;
     } else {
         inSettingsMenu = false;
-        beep(1, 100, 1200);
-        beep(1, 100, 900);
+        beep(1, 100, 2400);
+        beep(1, 100, 2200);
     }
 }
 
@@ -327,14 +326,16 @@ void readBattery() {
     int blinks = roundedPercentage / 25;
 
     // Ensure at least 1 blink for battery > 0%
-    if (blinks == 0 && roundedPercentage > 0);
-    blinks = 1;
-    // Couple beeps to let the user know im dying
-    beep(3,50,400);
+    if (blinks == 0 && roundedPercentage > 0) {
+      blinks = 1;
+      // Couple beeps to let the user know im dying
+      beep(3,50,2250);
+    }
+
 
     // Blink the LED based on the battery level
     digitalWrite(PIN_EXTLED, LOW);
-    delay(200);
+    delay(300);
     blink(blinks, 200);
 }
 
