@@ -1,5 +1,6 @@
 // still very work in progress
 // 1 button, 1 funky, paddles
+// just bunch of stuff thrown together
 
 #include <Arduino.h>
 #include <bluefruit.h>
@@ -53,7 +54,7 @@ const int ENC_A =      1;
 const int ENC_B =      0;
 
 
-// Settings variables (stored in RAM because XIAO didn't have EEPROM haha)
+// Settings variables (stored in RAM because XIAO didn't have EEPROM)
 int clutchMode = 0;
 unsigned long clutchDelay = 200; // total clutch-kick delay in ms
 
@@ -130,8 +131,8 @@ void setup() {
   pinMode(PIN_HICHG, OUTPUT);
   pinMode(PIN_CHG, INPUT);
   digitalWrite(PIN_HICHG, LOW); // Set charge current to 100mA
-  analogReference(AR_DEFAULT);
-  analogReadResolution(12);
+  analogReference(AR_DEFAULT); // Default reference voltage
+  analogReadResolution(12); // 12-bit resolution
 
   // BLE
   Bluefruit.begin();
@@ -161,9 +162,11 @@ void setup() {
   digitalWrite(PIN_VBAT_ENABLE, LOW); // VBAT read enable
   digitalWrite(PIN_HICHG, LOW); // Set charge current to 100mA
 
-  // Initialize ADC for battery voltage reading
-  analogReference(AR_DEFAULT); // Default reference voltage
-  analogReadResolution(12); // 12-bit resolution
+
+
+
+
+
 
   Serial.println("Checking clutch...");
 
@@ -250,15 +253,12 @@ void loop() {
   }
 
 
-  // Read buttons and handle debouncing
-  // work in progress
-  // hold special button for layer 2 outputs
+  // Read funky buttons with logic
   // work in progress
 
 
-
-
-  // Read the state of the switch into a local variable:
+  // Special button handling
+  // hold for layer 2 maybe in the future
   bool reading = digitalRead(SPECIAL_BTN);
   // Check if the button state has changed
   if (reading != lastSpecialBtnState) {
@@ -272,12 +272,14 @@ void loop() {
       // only toggle the LED if the new button state is HIGH
       if (specialBtnState == HIGH) {
         Serial.println("Button Released");
+        // gp
       } else {
         Serial.println("Button Pressed");
+        // gp
       }
     }
   }
-  // Save the reading. Next time through the loop, it'll be the lastButtonState:
+  // ge report
   lastSpecialBtnState = reading;
 
 
@@ -315,10 +317,12 @@ void handleButtonStateChange(int button, bool pressed) {
 }
 
 void connect_callback(uint16_t conn_handle) {
+  // work in progress
   Serial.println("Connected");
 }
 
 void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
+  // work in progress
   Serial.println("Disconnected");
 }
 
