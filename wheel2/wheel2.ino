@@ -180,17 +180,7 @@ void setup() {
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
 
-  // Charging and Battery Monitoring Setup
-  pinMode(PIN_VBAT, INPUT);
-  pinMode(PIN_VBAT_ENABLE, OUTPUT);
-  pinMode(PIN_HICHG, OUTPUT);
-  pinMode(PIN_CHG, INPUT);
-  pinMode(EXT_LED, OUTPUT);
-
-  digitalWrite(PIN_VBAT_ENABLE, LOW); // VBAT read enable
-  digitalWrite(PIN_HICHG, LOW); // Set charge current to 100mA
-
-
+  
   // hold SPECIAL_BTN at startup to enable clutchMode
   if (digitalRead(SPECIAL_BTN) == LOW) {
     Serial.println("Clutch enabled!");
@@ -229,7 +219,6 @@ void loop() {
   updateFunkyButtons();
   updateEncoder();
   updatePaddles();
-  updateFunkyButtons();
 
   // power saving, WIP
   // If more than 5 (300000) minutes have passed since the last button press, enter sleep mode
@@ -238,11 +227,6 @@ void loop() {
   //  stopAdv(); // Stop advertising
   //}
   //lastButtonPressTime to start advertising again...
-
-
-
-  // Read funky buttons with logic
-  // work in progress
 
   //delay(5); //let the brother relax
 }
