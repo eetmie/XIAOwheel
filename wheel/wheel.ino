@@ -1,3 +1,7 @@
+// basically a very simple bluetooth wheel, with bonus clutch kick system added.
+// In Assetto Corsa cars with manual gearbox switch very slowly with automatic clutch, so this wheel kicks the clutch gear way faster (I dont have clutch pedal).
+// TODO: paddle interrupts for better performance
+
 #include <bluefruit.h>
 #include <Bounce2.h>
 //#include <Adafruit_TinyUSB.h> // for Serial.print()
