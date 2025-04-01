@@ -12,18 +12,30 @@
 #define PIN_HICHG       (22) // D22 charge current setting LOW:100mA HIGH:50mA
 #define PIN_CHG         (23) // D23 charge indicator LOW:charge HIGH:no charge
 
+// Battery voltage range constants
+const float BATTERY_MIN_VOLTAGE = 3.0; // minimum voltage
+const float BATTERY_MAX_VOLTAGE = 4.2; // maximum voltage 
+
 // timeout shutdown
 unsigned long lastActivityTime = millis();  // Initially set to the start time
 const unsigned long inactivityThreshold = 1800000; // 30 minutes in milliseconds (30 * 60 * 1000)
 
+unsigned long lastPollTime = 0;
+const unsigned long pollInterval = 8; // 8ms = 125Hz
+
+// Battery level monitoring
+uint8_t batteryLevel = 100; // Initial battery level
+unsigned long lastBatteryCheck = 0;
+const unsigned long batteryCheckInterval = 60000; // Check battery every 60 seconds
 
 // BLE stuff
 BLEDis bledis;
+BLEBas blebas; // Battery Service
 BLEHidGamepad blegamepad;
 hid_gamepad_report_t gp;
 
 // - nRF52840: -40dBm, -20dBm, -16dBm, -12dBm, -8dBm, -4dBm, 0dBm, +2dBm, +3dBm, +4dBm, +5dBm, +6dBm, +7dBm and +8dBm.
-const int TxPower = 4;
+const int TxPower = 8;
 bool isConnected = false;
 bool isAdvertising = false;
 
@@ -60,22 +72,24 @@ Button funkyD(9, handleFunkyButtonPress, 4);
 // funkyPush is mapped as the Y-button
 Button funkyPush(8, handleFunkyButtonPress, 5);
 
-// paddleL is mapped to function as the LB (left bumper)
+// paddleL is mapped to function as the X
 Button paddleL(10, handlePaddlePress, 6);
 
-// paddleR is mapped to function as the RB
+// paddleR is mapped to function as the B
 Button paddleR(5, handlePaddlePress, 7);
 
 // Encoder variables
 volatile int encoderPosition = 0;
 int lastEncoded = 0;
 volatile unsigned long lastEncoderEvent = 0;
-const unsigned long encoderDebounceTime = 50;  // Microseconds
+const unsigned long encoderDebounceTime = 500;  // micros
 volatile bool cwRotationDetected = false;
 volatile bool ccwRotationDetected = false;
 
 // FunkyButton variables
 volatile unsigned long lastPushTime = 0;
+
+// TODO: Direct port reading
 
 void ISR_Encoder() {
     unsigned long currentMicros = micros();
@@ -110,13 +124,12 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(1), ISR_Encoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(0), ISR_Encoder, CHANGE);
 
-
   // Charging stuff
   pinMode(PIN_VBAT, INPUT);
   pinMode(PIN_VBAT_ENABLE, OUTPUT);
   pinMode(PIN_HICHG, OUTPUT);
   pinMode(PIN_CHG, INPUT);
-  digitalWrite(PIN_HICHG, LOW); // Set charge current to 100mA
+  digitalWrite(PIN_HICHG, LOW); // Set charge current to 100mA (max)
   analogReference(AR_DEFAULT); // Default reference voltage
   analogReadResolution(12); // 12-bit resolution
 
@@ -124,22 +137,28 @@ void setup() {
   Bluefruit.begin();
   Bluefruit.setName("OMP Trecento"); // This name will be visible in Windows
   Bluefruit.setTxPower(TxPower);
-  bledis.setManufacturer("iisakki");
-  bledis.setModel("02");
-  bledis.setSerialNum("0002");
+  bledis.setManufacturer("iisakki"); // for fun, doesnt affect anything
+  bledis.setModel("02");             // for fun, doesnt affect anything
+  bledis.setSerialNum("0002");       // for fun, doesnt affect anything
   bledis.begin();
   blegamepad.begin();
+  blebas.begin(); // Initialize Battery Service
+  
+  // Read and set initial battery level
+  updateBatteryLevel();
 
   // BLE callbacks
   Bluefruit.Periph.setConnectCallback(connect_callback);
   Bluefruit.Periph.setDisconnectCallback(disconnect_callback);
-
 
   blinkBatteryLevel();
   delay(2000);
   resetGamepadReport();
   startAdv();
 
+  // Initialize last poll time
+  lastPollTime = millis();
+  lastBatteryCheck = millis();
 }
 
 void loop() {
@@ -158,27 +177,56 @@ void loop() {
       return; // Skip the rest of the loop
   }
 
-  // Update all buttons
-  updateAllButtons();
+  // Check battery level periodically
+  if (currentTime - lastBatteryCheck >= batteryCheckInterval) {
+    lastBatteryCheck = currentTime;
+    updateBatteryLevel();
+  }
 
-  // Handle encoder changes detected by the ISR
-  if (cwRotationDetected) {
-    handleEncoderChange(true);
-    cwRotationDetected = false;  // Reset the flag
-    }
-  if (ccwRotationDetected) {
-    handleEncoderChange(false);
-    ccwRotationDetected = false;  // Reset the flag
-    }
+  // Proper 125Hz polling - only update every 8ms
+  if (currentTime - lastPollTime >= pollInterval) {
+    lastPollTime = currentTime; // Update the poll time
+    
+    // Update all buttons
+    updateAllButtons();
 
-  // Check charging status
+    // Handle encoder changes detected by the ISR
+    if (cwRotationDetected) {
+      handleEncoderChange(true);
+      cwRotationDetected = false;  // Reset the flag
+    }
+    if (ccwRotationDetected) {
+      handleEncoderChange(false);
+      ccwRotationDetected = false;  // Reset the flag
+    }
+  }
+
+  // Check charging status - this doesn't need to be limited to set Hz
   isCharging();
-
-  delay(10); // rough 100 hz polling
 }
 
 
+void updateBatteryLevel() {
+  float vbattVoltage = readBatteryVoltage();
+  
+  // Calculate battery percentage
+  int batteryPercent = (int)(((vbattVoltage - BATTERY_MIN_VOLTAGE) / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100);
+  
+  // Constrain to valid range
+  batteryPercent = constrain(batteryPercent, 0, 100);
+  
+  // Update BLE battery service with new level
+  if (batteryPercent != batteryLevel) {
+    batteryLevel = batteryPercent;
+    blebas.write(batteryLevel);
+    //Serial.print("Battery level updated: ");
+    //Serial.print(batteryLevel);
+    //Serial.println("%");
+  }
+}
+
 void updateAllButtons() {
+    // Use standard digitalRead method
     buttonButton.update();
     funkyA.update();
     funkyB.update();
@@ -189,13 +237,10 @@ void updateAllButtons() {
     paddleR.update();
 }
 
-
 void handlePaddlePress(bool state, int paddleId) {
     String name = (paddleId == 6) ? "Left" : "Right";
     //Serial.print(name + " paddle ");
     //Serial.println(state ? "pressed" : "released");
-
-    //resetGamepadReport(); // Clear existing reports
 
     // Map left paddle
     if (paddleId == 6) {
@@ -218,12 +263,9 @@ void handlePaddlePress(bool state, int paddleId) {
     lastActivityTime = millis();  // Update the last activity time
 }
 
-
 void handleButtonPress(bool state, int buttonId) {
     //Serial.print("Special button ");
     //Serial.println(state ? "pressed" : "released");
-
-    //resetGamepadReport(); // Clear existing reports
 
     if (state) {
         gp.buttons |= GAMEPAD_BUTTON_0;
@@ -233,6 +275,19 @@ void handleButtonPress(bool state, int buttonId) {
     
     blegamepad.report(&gp);
     lastActivityTime = millis();  // Update the last activity time
+}
+
+void updateDpadHat() {
+
+    // Clear all dpad buttons first
+    gp.buttons &= ~(GAMEPAD_BUTTON_12 | GAMEPAD_BUTTON_13 | GAMEPAD_BUTTON_14 | GAMEPAD_BUTTON_15);
+    
+    // Set the buttons based on current states - only handling UDLR (no diagonals)
+    if (stateA) gp.buttons |= GAMEPAD_BUTTON_13; // UP
+    if (stateB) gp.buttons |= GAMEPAD_BUTTON_15; // LEFT
+    if (stateC) gp.buttons |= GAMEPAD_BUTTON_12; // DOWN
+    if (stateD) gp.buttons |= GAMEPAD_BUTTON_14; // RIGHT
+    
 }
 
 
@@ -266,28 +321,19 @@ void handleFunkyButtonPress(bool state, int buttonId) {
     // Process the button press/release normally and update the gamepad report
     resetGamepadReport(); // Clear previous gamepad state before updating
 
-    // Update the gamepad report based on button states
-    if (stateA) gp.buttons |= GAMEPAD_BUTTON_13;
-    if (stateB) gp.buttons |= GAMEPAD_BUTTON_15;
-    if (stateC) gp.buttons |= GAMEPAD_BUTTON_12;
-    if (stateD) gp.buttons |= GAMEPAD_BUTTON_14;
-    if (statePush) gp.buttons |= GAMEPAD_BUTTON_3; // Mapping center push to Y/triangle-button
+    // Update dpad based on funky button states
+    updateDpadHat();
+    
+    // Handle the center push button (mapped to Y/triangle-button)
+    if (statePush) gp.buttons |= GAMEPAD_BUTTON_3;
 
     blegamepad.report(&gp); // Send the updated report
     lastActivityTime = millis();  // Update the last activity time
-
-    // Log button press/release
-    //Serial.print("Button ");
-    //Serial.print(buttonId);
-    //Serial.print(state ? " pressed" : " released");
-    //Serial.println();
 }
-
 
 void resetGamepadReport() {
     memset(&gp, 0, sizeof(hid_gamepad_report_t));  // Clear the gamepad report structure
 }
-
 
 void handleEncoderChange(bool isCW) {
   // Decide which button corresponds to the direction of rotation
@@ -303,8 +349,9 @@ void handleEncoderChange(bool isCW) {
   // Clear the button (simulate button release)
   gp.buttons &= ~buttonMask;
   blegamepad.report(&gp);  // Send the button release report
+  
+  lastActivityTime = millis();  // Update the last activity time
 }
-
 
 float readBatteryVoltage() {
   int readings = 5;
@@ -324,21 +371,17 @@ float readBatteryVoltage() {
   return voltageSum / readings; // Return the average voltage
 }
 
-
 void blinkBatteryLevel() {
-  const float BATTERY_MIN_VOLTAGE = 3.0; // minimum voltage
-  const float BATTERY_MAX_VOLTAGE = 4.2; // maximum voltage 
-
   float vbattVoltage = readBatteryVoltage(); // Get the current battery voltage
+  
   // Normalize the battery voltage to a percentage
   int batteryPercent = (int)(((vbattVoltage - BATTERY_MIN_VOLTAGE) / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100);
 
   // Calculate number of blinks based on 20% increments
   int blinks = (batteryPercent / 20) + 1; // Plus one to ensure at least one blink
 
-  blink(blinks, 300); // Blink with 500ms interval per blink
+  blink(blinks, 300); // Blink with 300ms interval per blink
 }
-
 
 void blink(int count, int duration) {
   for (int i = 0; i < count; i++) {
@@ -351,20 +394,17 @@ void blink(int count, int duration) {
   }
 }
 
-// Not used yet
 void connect_callback(uint16_t conn_handle) {
   //Serial.println("Connected");
   isConnected = true;
 }
 
-// Not used yet
 void disconnect_callback(uint16_t conn_handle, uint8_t reason) {
   //Serial.println("Disconnected");
   isConnected = false;
 }
 
-void startAdv()
-{
+void startAdv() {
   // Advertising packet
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
@@ -372,6 +412,9 @@ void startAdv()
 
   // Include BLE HID service
   Bluefruit.Advertising.addService(blegamepad);
+  
+  // Add Battery Service to advertising
+  Bluefruit.Advertising.addService(blebas);
 
   // There is enough room for the dev name in the advertising packet
   Bluefruit.Advertising.addName();
@@ -392,12 +435,10 @@ void startAdv()
   isAdvertising = true;
 }
 
-// Not used yet
 void stopAdv() {
   Bluefruit.Advertising.stop();
   isAdvertising = false;
 }
-
 
 bool isCharging() {
     bool chargingState = digitalRead(PIN_CHG) == LOW;

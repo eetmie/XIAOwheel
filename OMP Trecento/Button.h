@@ -9,7 +9,7 @@ public:
     volatile bool state;
     volatile bool lastState;
     volatile unsigned long lastDebounceTime;
-    static const unsigned long debounceDelay = 1; // milliseconds
+    static const unsigned long debounceDelay = 2;
 
     typedef void (*CallbackFunction)(bool, int); // Use int for flexibility in callback parameters
 
@@ -23,10 +23,13 @@ public:
     }
 
     void update() {
+        // Standard reading method
         bool reading = digitalRead(pin);
+        
         if (reading != lastState) {
             lastDebounceTime = millis();
         }
+        
         if ((millis() - lastDebounceTime) > debounceDelay) {
             if (reading != state) {
                 state = reading;
